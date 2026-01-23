@@ -128,6 +128,23 @@ docker-compose up
 | `HOST` | `0.0.0.0` | Server host |
 | `PORT` | `8000` | Server port |
 | `BASE_URL` | `http://localhost:8000` | Public base URL |
+| `REDIS_URL` | (none) | Redis URL for persistent storage (e.g., Upstash) |
+| `KV_URL` | (none) | Alternative Redis URL (Vercel KV) |
+
+## Persistent Storage (for Serverless)
+
+By default, the server uses in-memory storage which doesn't persist across serverless function invocations. For production use on Vercel, set up Redis:
+
+### Using Upstash (Recommended)
+
+1. Create a free Redis database at [upstash.com](https://upstash.com)
+2. Copy the `UPSTASH_REDIS_REST_URL` 
+3. Add it as `REDIS_URL` in your Vercel environment variables
+
+### Using Vercel KV
+
+1. Add Vercel KV to your project from the Vercel dashboard
+2. The `KV_URL` environment variable is automatically set
 
 ## Testing the PR
 

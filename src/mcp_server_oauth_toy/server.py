@@ -7,7 +7,6 @@ This server exposes:
 - A simple authorization UI where users can enter their name
 """
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -15,22 +14,28 @@ import os
 import secrets
 import sys
 import time
-from base64 import urlsafe_b64decode, urlsafe_b64encode
-from dataclasses import dataclass, field
+from base64 import urlsafe_b64encode
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import urlencode
 
-import mcp.server.stdio
 import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
-from mcp.server.sse import SseServerTransport
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
+
+from .storage import (
+    AccessToken,
+    AuthorizationCode,
+    PendingAuthorization,
+    RefreshToken,
+    create_oauth_store,
+    ACCESS_TOKEN_EXPIRY,
+)
 
 logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)
 logger = logging.getLogger(__name__)
@@ -44,161 +49,16 @@ HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
 BASE_URL = os.environ.get("BASE_URL", f"http://localhost:{PORT}")
 
-# OAuth settings
-AUTHORIZATION_CODE_EXPIRY = 300  # 5 minutes
-ACCESS_TOKEN_EXPIRY = 3600  # 1 hour
-REFRESH_TOKEN_EXPIRY = 86400  # 24 hours
-
-# ============================================================================
-# In-Memory Storage (for testing purposes)
-# ============================================================================
+# Global store (created lazily)
+_oauth_store = None
 
 
-@dataclass
-class AuthorizationCode:
-    """Represents an OAuth authorization code."""
-
-    code: str
-    client_id: str
-    redirect_uri: str
-    scope: str
-    state: str
-    code_challenge: str
-    code_challenge_method: str
-    user_name: str
-    created_at: float = field(default_factory=time.time)
-
-    def is_expired(self) -> bool:
-        return time.time() - self.created_at > AUTHORIZATION_CODE_EXPIRY
-
-
-@dataclass
-class AccessToken:
-    """Represents an OAuth access token."""
-
-    token: str
-    client_id: str
-    user_name: str
-    scope: str
-    created_at: float = field(default_factory=time.time)
-    expires_in: int = ACCESS_TOKEN_EXPIRY
-
-    def is_expired(self) -> bool:
-        return time.time() - self.created_at > self.expires_in
-
-
-@dataclass
-class RefreshToken:
-    """Represents an OAuth refresh token."""
-
-    token: str
-    client_id: str
-    user_name: str
-    scope: str
-    created_at: float = field(default_factory=time.time)
-
-    def is_expired(self) -> bool:
-        return time.time() - self.created_at > REFRESH_TOKEN_EXPIRY
-
-
-@dataclass
-class PendingAuthorization:
-    """Represents a pending authorization request (user hasn't entered name yet)."""
-
-    client_id: str
-    redirect_uri: str
-    scope: str
-    state: str
-    code_challenge: str
-    code_challenge_method: str
-    created_at: float = field(default_factory=time.time)
-
-
-class OAuthStore:
-    """In-memory storage for OAuth data."""
-
-    def __init__(self):
-        self.authorization_codes: dict[str, AuthorizationCode] = {}
-        self.access_tokens: dict[str, AccessToken] = {}
-        self.refresh_tokens: dict[str, RefreshToken] = {}
-        self.pending_authorizations: dict[str, PendingAuthorization] = {}
-        self.registered_clients: dict[str, dict[str, Any]] = {}
-
-    def register_client(self, client_id: str, client_info: dict[str, Any]) -> None:
-        """Register a client (for dynamic registration)."""
-        self.registered_clients[client_id] = client_info
-
-    def get_client(self, client_id: str) -> dict[str, Any] | None:
-        """Get a registered client."""
-        return self.registered_clients.get(client_id)
-
-    def store_pending_auth(
-        self, auth_id: str, pending: PendingAuthorization
-    ) -> None:
-        """Store a pending authorization."""
-        self.pending_authorizations[auth_id] = pending
-
-    def get_pending_auth(self, auth_id: str) -> PendingAuthorization | None:
-        """Get a pending authorization."""
-        return self.pending_authorizations.get(auth_id)
-
-    def remove_pending_auth(self, auth_id: str) -> None:
-        """Remove a pending authorization."""
-        self.pending_authorizations.pop(auth_id, None)
-
-    def store_auth_code(self, code: AuthorizationCode) -> None:
-        """Store an authorization code."""
-        self.authorization_codes[code.code] = code
-
-    def get_auth_code(self, code: str) -> AuthorizationCode | None:
-        """Get and validate an authorization code."""
-        auth_code = self.authorization_codes.get(code)
-        if auth_code and not auth_code.is_expired():
-            return auth_code
-        if auth_code:
-            del self.authorization_codes[code]
-        return None
-
-    def consume_auth_code(self, code: str) -> AuthorizationCode | None:
-        """Get and remove an authorization code (single use)."""
-        auth_code = self.get_auth_code(code)
-        if auth_code:
-            del self.authorization_codes[code]
-        return auth_code
-
-    def store_access_token(self, token: AccessToken) -> None:
-        """Store an access token."""
-        self.access_tokens[token.token] = token
-
-    def get_access_token(self, token: str) -> AccessToken | None:
-        """Get and validate an access token."""
-        access_token = self.access_tokens.get(token)
-        if access_token and not access_token.is_expired():
-            return access_token
-        if access_token:
-            del self.access_tokens[token]
-        return None
-
-    def store_refresh_token(self, token: RefreshToken) -> None:
-        """Store a refresh token."""
-        self.refresh_tokens[token.token] = token
-
-    def get_refresh_token(self, token: str) -> RefreshToken | None:
-        """Get and validate a refresh token."""
-        refresh_token = self.refresh_tokens.get(token)
-        if refresh_token and not refresh_token.is_expired():
-            return refresh_token
-        if refresh_token:
-            del self.refresh_tokens[token]
-        return None
-
-    def revoke_refresh_token(self, token: str) -> None:
-        """Revoke a refresh token."""
-        self.refresh_tokens.pop(token, None)
-
-
-# Global store
-oauth_store = OAuthStore()
+def get_oauth_store():
+    """Get or create the OAuth store."""
+    global _oauth_store
+    if _oauth_store is None:
+        _oauth_store = create_oauth_store()
+    return _oauth_store
 
 # ============================================================================
 # OAuth 2.0 Endpoints
@@ -262,7 +122,7 @@ async def register_client(request: Request) -> JSONResponse:
         ),
     }
 
-    oauth_store.register_client(client_id, client_info)
+    get_oauth_store().register_client(client_id, client_info)
 
     logger.info(f"Registered new client: {client_id}")
 
@@ -440,10 +300,10 @@ async def authorize(request: Request) -> Response:
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method,
     )
-    oauth_store.store_pending_auth(auth_id, pending)
+    get_oauth_store().store_pending_auth(auth_id, pending)
 
     # Get client name for display
-    client = oauth_store.get_client(client_id)
+    client = get_oauth_store().get_client(client_id)
     client_name = client.get("client_name", client_id) if client else client_id
 
     # Show authorization page
@@ -467,7 +327,7 @@ async def authorize_complete(request: Request) -> Response:
         )
 
     # Get pending authorization
-    pending = oauth_store.get_pending_auth(auth_id)
+    pending = get_oauth_store().get_pending_auth(auth_id)
     if not pending:
         return HTMLResponse(
             "<h1>Error</h1><p>Authorization request expired or not found.</p>",
@@ -475,7 +335,7 @@ async def authorize_complete(request: Request) -> Response:
         )
 
     # Remove pending auth
-    oauth_store.remove_pending_auth(auth_id)
+    get_oauth_store().remove_pending_auth(auth_id)
 
     # Generate authorization code
     code = generate_token(32)
@@ -489,7 +349,7 @@ async def authorize_complete(request: Request) -> Response:
         code_challenge_method=pending.code_challenge_method,
         user_name=user_name,
     )
-    oauth_store.store_auth_code(auth_code)
+    get_oauth_store().store_auth_code(auth_code)
 
     logger.info(f"Generated auth code for user: {user_name}")
 
@@ -550,7 +410,7 @@ async def handle_authorization_code_grant(body: dict) -> JSONResponse:
         )
 
     # Get and consume authorization code
-    auth_code = oauth_store.consume_auth_code(code)
+    auth_code = get_oauth_store().consume_auth_code(code)
     if not auth_code:
         return JSONResponse(
             {"error": "invalid_grant", "error_description": "Invalid or expired authorization code"},
@@ -580,7 +440,7 @@ async def handle_authorization_code_grant(body: dict) -> JSONResponse:
         user_name=auth_code.user_name,
         scope=auth_code.scope,
     )
-    oauth_store.store_access_token(access_token)
+    get_oauth_store().store_access_token(access_token)
 
     refresh_token = RefreshToken(
         token=generate_token(32),
@@ -588,7 +448,7 @@ async def handle_authorization_code_grant(body: dict) -> JSONResponse:
         user_name=auth_code.user_name,
         scope=auth_code.scope,
     )
-    oauth_store.store_refresh_token(refresh_token)
+    get_oauth_store().store_refresh_token(refresh_token)
 
     logger.info(f"Issued tokens for user: {auth_code.user_name}")
 
@@ -615,7 +475,7 @@ async def handle_refresh_token_grant(body: dict) -> JSONResponse:
         )
 
     # Get refresh token
-    refresh_token = oauth_store.get_refresh_token(refresh_token_str)
+    refresh_token = get_oauth_store().get_refresh_token(refresh_token_str)
     if not refresh_token:
         return JSONResponse(
             {"error": "invalid_grant", "error_description": "Invalid or expired refresh token"},
@@ -630,7 +490,7 @@ async def handle_refresh_token_grant(body: dict) -> JSONResponse:
         )
 
     # Revoke old refresh token
-    oauth_store.revoke_refresh_token(refresh_token_str)
+    get_oauth_store().revoke_refresh_token(refresh_token_str)
 
     # Generate new tokens
     access_token = AccessToken(
@@ -639,7 +499,7 @@ async def handle_refresh_token_grant(body: dict) -> JSONResponse:
         user_name=refresh_token.user_name,
         scope=refresh_token.scope,
     )
-    oauth_store.store_access_token(access_token)
+    get_oauth_store().store_access_token(access_token)
 
     new_refresh_token = RefreshToken(
         token=generate_token(32),
@@ -647,7 +507,7 @@ async def handle_refresh_token_grant(body: dict) -> JSONResponse:
         user_name=refresh_token.user_name,
         scope=refresh_token.scope,
     )
-    oauth_store.store_refresh_token(new_refresh_token)
+    get_oauth_store().store_refresh_token(new_refresh_token)
 
     logger.info(f"Refreshed tokens for user: {refresh_token.user_name}")
 
@@ -675,7 +535,7 @@ def validate_token(request: Request) -> AccessToken | None:
     token = get_bearer_token(request)
     if not token:
         return None
-    return oauth_store.get_access_token(token)
+    return get_oauth_store().get_access_token(token)
 
 
 # ============================================================================
