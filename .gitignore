@@ -39,3 +39,8 @@ htmlcov/
 # uv
 .uv/
 uv.lock
+
+# Environment files
+.env
+.env.*
+!.env.example
