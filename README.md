@@ -140,6 +140,29 @@ To test the OAuth implementation:
 3. Complete the browser-based authorization
 4. Verify the `whoami` tool returns your name
 
+## Deploy to Vercel
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fbvolpato%2Fmcp-server-oauth-toy)
+
+1. Click the button above or import the repo at [vercel.com/new](https://vercel.com/new)
+2. Select **"Other"** as the framework (Vercel auto-detects Python)
+3. Deploy!
+
+The `BASE_URL` is automatically set from `VERCEL_URL`.
+
+Then update your mcp_servers.json:
+
+```json
+{
+  "mcpServers": {
+    "oauth-toy": {
+      "url": "https://your-deployment.vercel.app/mcp",
+      "oauth": true
+    }
+  }
+}
+```
+
 ## License
 
 MIT

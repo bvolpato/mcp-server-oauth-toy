@@ -1,0 +1,6 @@
+mcp>=1.9.0
+httpx>=0.28.0
+uvicorn>=0.34.0
+starlette>=0.45.0
+python-jose>=3.3.0
+authlib>=1.5.0
