@@ -5,7 +5,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Install uv for fast package management
-RUN pip install --no-cache-dir uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.0 /uv /uvx /bin/
 
 # Copy project files
 COPY pyproject.toml README.md ./
