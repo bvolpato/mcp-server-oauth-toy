@@ -1,14 +1,15 @@
-# Use Python 3.12 slim image
-FROM python:3.12-slim
+# Pin Python to the age-qualified 3.12.14 slim image.
+FROM ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b AS uv
+FROM python:3.12.14-slim-trixie@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
 
 # Set working directory
 WORKDIR /app
 
 # Install uv for fast package management
-COPY --from=ghcr.io/astral-sh/uv:0.13.0 /uv /uvx /bin/
+COPY --from=uv /uv /uvx /bin/
 
 # Copy project files
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md uv.toml ./
 COPY src/ src/
 
 # Install dependencies using uv
