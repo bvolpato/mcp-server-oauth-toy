@@ -1,4 +1,4 @@
-# Pin Python to the age-qualified 3.12.14 slim image.
+# Pin Python to the age-qualified 3.14.7 slim image.
 FROM ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b AS uv
 FROM python:3.14.7-slim-trixie@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d
 
