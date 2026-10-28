@@ -542,14 +542,12 @@ def validate_token(request: Request) -> AccessToken | None:
 # MCP Server
 # ============================================================================
 
-# Create MCP server instance
-mcp_server = Server("mcp-server-oauth-toy")
-
-
-@mcp_server.list_tools()
-async def handle_list_tools() -> list[types.Tool]:
+# List tools using the MCP SDK 2 low-level handler API.
+async def handle_list_tools(
+    _ctx: Any, _params: types.PaginatedRequestParams | None
+) -> types.ListToolsResult:
     """List available tools."""
-    return [
+    return types.ListToolsResult(tools=[
         types.Tool(
             name="whoami",
             description="Returns the name of the authenticated user. Use this to verify OAuth authentication is working.",
@@ -573,60 +571,69 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["message"],
             },
         ),
-    ]
+    ])
 
 
 # Store for per-request user context
 _request_user_name: str | None = None
 
 
-@mcp_server.call_tool()
 async def handle_call_tool(
-    name: str, arguments: dict[str, Any] | None
-) -> list[types.TextContent]:
+    _ctx: Any, params: types.CallToolRequestParams
+) -> types.CallToolResult:
     """Handle tool calls."""
     global _request_user_name
+    name = params.name
+    arguments = params.arguments
 
     if name == "whoami":
         if _request_user_name:
-            return [
+            return types.CallToolResult(content=[
                 types.TextContent(
                     type="text",
                     text=f"You are authenticated as: {_request_user_name}",
                 )
-            ]
+            ])
         else:
-            return [
+            return types.CallToolResult(content=[
                 types.TextContent(
                     type="text",
                     text="Error: Not authenticated or user context not available",
                 )
-            ]
+            ])
 
     elif name == "echo":
         message = (arguments or {}).get("message", "")
         if _request_user_name:
-            return [
+            return types.CallToolResult(content=[
                 types.TextContent(
                     type="text",
                     text=f"{_request_user_name} says: {message}",
                 )
-            ]
+            ])
         else:
-            return [
+            return types.CallToolResult(content=[
                 types.TextContent(
                     type="text",
                     text=f"Anonymous says: {message}",
                 )
-            ]
+            ])
 
     else:
-        return [
+        return types.CallToolResult(content=[
             types.TextContent(
                 type="text",
                 text=f"Unknown tool: {name}",
             )
-        ]
+        ])
+
+
+# Create MCP server instance with constructor-registered handlers.
+mcp_server = Server(
+    "mcp-server-oauth-toy",
+    on_list_tools=handle_list_tools,
+    on_call_tool=handle_call_tool,
+)
 
 
 # ============================================================================
