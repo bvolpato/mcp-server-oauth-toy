@@ -5,7 +5,7 @@ description = "A toy MCP server with OAuth authentication for testing mcp-cli OA
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.9.0,<2",
+    "mcp>=2.3.0,<3",
     "httpx>=0.28.0",
     "uvicorn>=0.34.0",
     "starlette>=0.45.0",
